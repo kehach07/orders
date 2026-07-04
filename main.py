@@ -7,7 +7,7 @@ import uuid
 
 app = FastAPI()
 
-EMAIL = "kehachandrakar07@gmail.com"   # Replace with your email
+EMAIL = "23f2000576@ds.study.iitm.ac.in"   # Replace with your email
 
 START_TIME = time.time()
 
