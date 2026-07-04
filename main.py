@@ -1,125 +1,79 @@
-from fastapi import FastAPI, Request, Header, Body
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
-from collections import defaultdict
-import uuid
+from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse
+from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
+from collections import deque
 import time
-import base64
+import uuid
 
 app = FastAPI()
 
-# -----------------------------
-# CORS
-# -----------------------------
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["Retry-After"],
+EMAIL = "kehachandrakar07@gmail.com"   # Replace with your email
+
+START_TIME = time.time()
+
+# Prometheus Counter
+http_requests_total = Counter(
+    "http_requests_total",
+    "Total HTTP requests"
 )
 
-# -----------------------------
-# CONFIG
-# -----------------------------
-TOTAL_ORDERS = 59
-RATE_LIMIT = 18
-WINDOW = 10
+# In-memory logs
+logs = deque(maxlen=1000)
 
-# -----------------------------
-# Fixed catalog
-# -----------------------------
-orders = [{"id": i, "item": f"Order {i}"} for i in range(1, TOTAL_ORDERS + 1)]
 
-# -----------------------------
-# Stores
-# -----------------------------
-idempotency_store = {}
-client_requests = defaultdict(list)
-
-# -----------------------------
-# Rate Limiter
-# -----------------------------
 @app.middleware("http")
-async def rate_limit(request: Request, call_next):
-    client = request.headers.get("X-Client-Id", "default")
-    now = time.time()
+async def logging_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
 
-    client_requests[client] = [
-        t for t in client_requests[client]
-        if now - t < WINDOW
-    ]
+    http_requests_total.inc()
 
-    if len(client_requests[client]) >= RATE_LIMIT:
-        retry = max(1, int(WINDOW - (now - client_requests[client][0])))
+    response = await call_next(request)
 
-        return JSONResponse(
-            status_code=429,
-            content={"detail": "Rate limit exceeded"},
-            headers={"Retry-After": str(retry)},
-        )
+    logs.append({
+        "level": "INFO",
+        "ts": time.time(),
+        "path": request.url.path,
+        "request_id": request_id
+    })
 
-    client_requests[client].append(now)
+    response.headers["X-Request-ID"] = request_id
 
-    return await call_next(request)
+    return response
 
 
-# -----------------------------
-# Root
-# -----------------------------
 @app.get("/")
 def root():
-    return {"message": "Orders API Running"}
+    return {"message": "Observable API Running"}
 
 
-# -----------------------------
-# POST /orders
-# -----------------------------
-@app.post("/orders", status_code=201)
-async def create_order(
-    body: dict = Body(default={}),
-    idempotency_key: str = Header(..., alias="Idempotency-Key"),
-):
-    if idempotency_key in idempotency_store:
-        return idempotency_store[idempotency_key]
-
-    order = {
-        "id": str(uuid.uuid4()),
-        "status": "created",
-    }
-
-    idempotency_store[idempotency_key] = order
-
-    return order
-
-
-# -----------------------------
-# GET /orders
-# -----------------------------
-@app.get("/orders")
-async def get_orders(
-    limit: int = 10,
-    cursor: Optional[str] = None,
-):
-    start = 0
-
-    if cursor:
-        try:
-            start = int(base64.b64decode(cursor).decode())
-        except Exception:
-            start = 0
-
-    end = min(start + limit, TOTAL_ORDERS)
-
-    items = orders[start:end]
-
-    next_cursor = None
-    if end < TOTAL_ORDERS:
-        next_cursor = base64.b64encode(str(end).encode()).decode()
+@app.get("/work")
+def work(n: int = 1):
+    # simulate work
+    for _ in range(n):
+        pass
 
     return {
-        "items": items,
-        "next_cursor": next_cursor,
+        "email": EMAIL,
+        "done": n
     }
+
+
+@app.get("/metrics")
+def metrics():
+    return PlainTextResponse(
+        generate_latest().decode(),
+        media_type=CONTENT_TYPE_LATEST
+    )
+
+
+@app.get("/healthz")
+def health():
+    return {
+        "status": "ok",
+        "uptime_s": time.time() - START_TIME
+    }
+
+
+@app.get("/logs/tail")
+def tail(limit: int = 10):
+    return list(logs)[-limit:]
