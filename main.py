@@ -3,8 +3,8 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from collections import defaultdict
-import time
 import uuid
+import time
 import base64
 
 app = FastAPI()
@@ -14,17 +14,22 @@ app = FastAPI()
 # -----------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # If the exam requires a specific origin, replace "*" with it.
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-    
+
 # -----------------------------
-# Fixed catalog
+# CONFIG
 # -----------------------------
 TOTAL_ORDERS = 59
+RATE_LIMIT = 18
+WINDOW = 10
 
+# -----------------------------
+# Fixed Orders
+# -----------------------------
 orders = [
     {
         "id": i,
@@ -34,61 +39,59 @@ orders = [
 ]
 
 # -----------------------------
-# Idempotency
+# Idempotency Store
 # -----------------------------
 idempotency_store = {}
 
 # -----------------------------
-# Rate limiting
+# Rate Limit Store
 # -----------------------------
-RATE_LIMIT = 18
-WINDOW = 10
-
-buckets = defaultdict(list)
+client_requests = defaultdict(list)
 
 
 @app.middleware("http")
 async def rate_limit(request: Request, call_next):
-    client = request.headers.get("X-Client-Id", "anonymous")
+    client = request.headers.get("X-Client-Id", "default")
 
     now = time.time()
 
-    buckets[client] = [
-        t for t in buckets[client]
+    client_requests[client] = [
+        t for t in client_requests[client]
         if now - t < WINDOW
     ]
 
-    if len(buckets[client]) >= RATE_LIMIT:
-        retry_after = int(WINDOW - (now - buckets[client][0])) + 1
+    if len(client_requests[client]) >= RATE_LIMIT:
+        retry = int(WINDOW - (now - client_requests[client][0])) + 1
 
         return JSONResponse(
             status_code=429,
             headers={
-                "Retry-After": str(retry_after)
+                "Retry-After": str(retry)
             },
             content={
                 "detail": "Rate limit exceeded"
             },
         )
 
-    buckets[client].append(now)
+    client_requests[client].append(now)
 
     return await call_next(request)
 
 
 # -----------------------------
-# Idempotent POST
+# POST /orders
 # -----------------------------
 @app.post("/orders", status_code=201)
-def create_order(
+async def create_order(
     idempotency_key: str = Header(..., alias="Idempotency-Key")
 ):
+
     if idempotency_key in idempotency_store:
         return idempotency_store[idempotency_key]
 
     order = {
         "id": str(uuid.uuid4()),
-        "status": "created",
+        "status": "created"
     }
 
     idempotency_store[idempotency_key] = order
@@ -97,19 +100,21 @@ def create_order(
 
 
 # -----------------------------
-# Cursor Pagination
+# GET /orders
 # -----------------------------
 @app.get("/orders")
-def list_orders(
+async def get_orders(
     limit: int = 10,
     cursor: Optional[str] = None,
 ):
+
     start = 0
 
     if cursor:
-        start = int(
-            base64.b64decode(cursor).decode()
-        )
+        try:
+            start = int(base64.b64decode(cursor).decode())
+        except Exception:
+            start = 0
 
     end = min(start + limit, TOTAL_ORDERS)
 
@@ -124,5 +129,12 @@ def list_orders(
 
     return {
         "items": items,
-        "next_cursor": next_cursor,
+        "next_cursor": next_cursor
+    }
+
+
+@app.get("/")
+def root():
+    return {
+        "message": "Orders API Running"
     }
