@@ -14,10 +14,15 @@ app = FastAPI()
 # -----------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://exam.sanand.workers.dev",
+        "https://tds.s-anand.net",
+        "https://tools-in-data-science.pages.dev",
+    ],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Retry-After"],
 )
 
 # -----------------------------
@@ -78,16 +83,15 @@ async def rate_limit(request: Request, call_next):
     return await call_next(request)
 
 
-# -----------------------------
-# POST /orders
-# -----------------------------
-@app.post("/orders", status_code=201)
+@app.post("/orders")
 async def create_order(
     idempotency_key: str = Header(..., alias="Idempotency-Key")
 ):
-
     if idempotency_key in idempotency_store:
-        return idempotency_store[idempotency_key]
+        return JSONResponse(
+            status_code=201,
+            content=idempotency_store[idempotency_key]
+        )
 
     order = {
         "id": str(uuid.uuid4()),
@@ -96,7 +100,10 @@ async def create_order(
 
     idempotency_store[idempotency_key] = order
 
-    return order
+    return JSONResponse(
+        status_code=201,
+        content=order
+    )
 
 
 # -----------------------------
